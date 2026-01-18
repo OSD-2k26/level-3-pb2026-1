@@ -1,0 +1,85 @@
+name: Level 4 Autograding
+
+on: [push]
+
+jobs:
+  grade:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0   # FULL history required
+
+      - name: Validate Level 4
+        run: |
+          set -e
+
+          echo "🔄 Fetching all branches..."
+          git fetch --all --quiet
+
+          # Ensure local tracking branches exist (CI safety)
+          for r in $(git branch -r | grep -v '->'); do
+            git branch --track "${r#origin/}" "$r" 2>/dev/null || true
+          done
+
+          echo "🔍 Detecting branches..."
+          BRANCHES=$(git branch --format='%(refname:short)' | tr '[:upper:]' '[:lower:]')
+
+          PATH_BRANCH=$(echo "$BRANCHES" | grep 'path' | head -n 1 || true)
+          TRUTH_BRANCH=$(echo "$BRANCHES" | grep 'truth' | head -n 1 || true)
+
+          [ -z "$PATH_BRANCH" ] && { echo "❌ No path branch found"; exit 1; }
+          [ -z "$TRUTH_BRANCH" ] && { echo "❌ No truth branch found"; exit 1; }
+
+          echo "✅ Found branches:"
+          echo "   Path  → $PATH_BRANCH"
+          echo "   Truth → $TRUTH_BRANCH"
+
+          echo "🔍 Checking file origins..."
+
+          # path.txt must come from path branch
+          git checkout "$PATH_BRANCH" >/dev/null 2>&1
+          [ ! -f path.txt ] && { echo "❌ path.txt missing in path branch"; exit 1; }
+
+          git checkout "$TRUTH_BRANCH" >/dev/null 2>&1
+          [ -f path.txt ] && { echo "❌ path.txt must NOT exist in truth branch"; exit 1; }
+
+          # truth.txt must come from truth branch
+          [ ! -f truth.txt ] && { echo "❌ truth.txt missing in truth branch"; exit 1; }
+
+          git checkout "$PATH_BRANCH" >/dev/null 2>&1
+          [ -f truth.txt ] && { echo "❌ truth.txt must NOT exist in path branch"; exit 1; }
+
+          echo "🔍 Checking main branch..."
+          git checkout main >/dev/null 2>&1 || git checkout master >/dev/null 2>&1
+
+          [ ! -f path.txt ] && { echo "❌ path.txt missing in main"; exit 1; }
+          [ ! -f truth.txt ] && { echo "❌ truth.txt missing in main"; exit 1; }
+
+          echo "🔍 Checking merge history..."
+
+          # Get merge commits on main
+          MERGES=$(git log --merges --pretty=%H)
+
+          PATH_MERGE=""
+          TRUTH_MERGE=""
+
+          for m in $MERGES; do
+            git show --name-only --pretty="" "$m" | tr '[:upper:]' '[:lower:]' | grep -qx "path.txt" && PATH_MERGE="$m"
+            git show --name-only --pretty="" "$m" | tr '[:upper:]' '[:lower:]' | grep -qx "truth.txt" && TRUTH_MERGE="$m"
+          done
+
+          [ -z "$PATH_MERGE" ] && { echo "❌ path branch not merged properly"; exit 1; }
+          [ -z "$TRUTH_MERGE" ] && { echo "❌ truth branch not merged properly"; exit 1; }
+
+          # Enforce merge order: path BEFORE truth
+          PATH_TIME=$(git show -s --format=%ct "$PATH_MERGE")
+          TRUTH_TIME=$(git show -s --format=%ct "$TRUTH_MERGE")
+
+          if [ "$PATH_TIME" -ge "$TRUTH_TIME" ]; then
+            echo "❌ path branch must be merged BEFORE truth branch"
+            exit 1
+          fi
+
+          echo "✅ LEVEL 4 PASSED"
